@@ -103,17 +103,16 @@ def main() -> None:
         "device": torch.cuda.get_device_name(0) if device.type == "cuda" else f"cpu ({platform.processor()})",
         "torch": torch.__version__,
     }
-    import peft
     import transformers
 
-    report["transformers"], report["peft"] = transformers.__version__, peft.__version__
+    report["transformers"] = transformers.__version__
     print(report, flush=True)
 
     torch.manual_seed(0)
     t = time.time()
     model = SelectorModel(SelectorConfig()).to(device)
     report["load_s"] = round(time.time() - t, 1)
-    report["params"] = model.param_counts()
+    report["params"] = {**model.param_counts(), "lora_layers": model.lora_layers}
     print("loaded:", report["params"], flush=True)
 
     from transformers import AutoTokenizer

@@ -49,6 +49,42 @@ class SelectorConfig:
     n_actions: int = len(ACTIONS)
 
 
+class LoRALinear(nn.Module):
+    """A frozen Linear plus a trainable low-rank update: y = W x + (alpha / r) * B A x."""
+
+    def __init__(self, base: nn.Linear, rank: int, alpha: int, dropout: float):
+        super().__init__()
+        self.base = base
+        self.lora_A = nn.Parameter(torch.empty(rank, base.in_features))
+        self.lora_B = nn.Parameter(torch.zeros(base.out_features, rank))  # zero: starts as a no-op
+        nn.init.kaiming_uniform_(self.lora_A, a=math.sqrt(5))
+        self.scaling = alpha / rank
+        self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
+
+    @property
+    def weight(self) -> torch.Tensor:  # some callers read .weight.dtype of the layer they call
+        return self.base.weight
+
+    @property
+    def bias(self):
+        return self.base.bias
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        update = F.linear(F.linear(self.dropout(x), self.lora_A.to(x.dtype)), self.lora_B.to(x.dtype))
+        return self.base(x) + update * self.scaling
+
+
+def add_lora(module: nn.Module, targets: list[str], rank: int, alpha: int, dropout: float) -> int:
+    """Wraps every nn.Linear whose attribute name is in `targets`. Returns how many were wrapped."""
+    wrapped = 0
+    for parent in list(module.modules()):
+        for name, child in list(parent.named_children()):
+            if name in targets and isinstance(child, nn.Linear):
+                setattr(parent, name, LoRALinear(child, rank, alpha, dropout))
+                wrapped += 1
+    return wrapped
+
+
 class ElementAdapter(nn.Module):
     """(box, type, pooled text embedding) -> one vector in the body's input space."""
 
@@ -78,7 +114,6 @@ class ElementAdapter(nn.Module):
 class SelectorModel(nn.Module):
     def __init__(self, cfg: SelectorConfig | None = None, dtype: torch.dtype = torch.float32):
         super().__init__()
-        from peft import LoraConfig, inject_adapter_in_model
         from transformers import AutoModelForCausalLM
 
         self.cfg = cfg or SelectorConfig()
@@ -86,15 +121,9 @@ class SelectorModel(nn.Module):
         self.body = lm.model  # embeddings + layers + final norm; the vocabulary head is not used
         for p in self.body.parameters():
             p.requires_grad_(False)
-        inject_adapter_in_model(
-            LoraConfig(
-                r=self.cfg.lora_rank,
-                lora_alpha=self.cfg.lora_alpha,
-                lora_dropout=self.cfg.lora_dropout,
-                target_modules=LORA_TARGETS,
-            ),
-            self.body,
-        )
+        self.lora_layers = add_lora(self.body, LORA_TARGETS, self.cfg.lora_rank, self.cfg.lora_alpha, self.cfg.lora_dropout)
+        if self.lora_layers == 0:
+            raise RuntimeError("no layers matched LORA_TARGETS; the base model's layer names changed")
         for name, p in self.body.named_parameters():
             p.requires_grad_("lora_" in name)
 
