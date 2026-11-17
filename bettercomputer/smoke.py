@@ -52,6 +52,7 @@ def format_check(model: SelectorModel, batch: dict, device: torch.device, amp: s
             sync(device)
             times.append(time.time() - t)
             loss_value = loss.item()
+            print(f"  {amp} pass {len(times)}: {times[-1]:.2f}s loss {loss_value:.3f}", flush=True)
             grads_finite = grads_finite and all(torch.isfinite(p.grad).all().item() for p in params if p.grad is not None)
     except Exception as exc:  # a format can simply be unsupported on a device
         return {"ok": False, "error": repr(exc)[:300]}
@@ -106,6 +107,12 @@ def main() -> None:
     import transformers
 
     report["transformers"] = transformers.__version__
+    try:
+        import fla  # noqa: F401  (flash-linear-attention: optimized kernel for the recurrent layers)
+
+        report["recurrent_kernel"] = "flash-linear-attention"
+    except Exception:
+        report["recurrent_kernel"] = "reference pytorch"
     print(report, flush=True)
 
     torch.manual_seed(0)
