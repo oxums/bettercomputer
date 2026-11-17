@@ -94,6 +94,7 @@ def main() -> None:
     ap.add_argument("--batch-size", type=int, default=16)
     ap.add_argument("--eval-batches", type=int, default=16)
     ap.add_argument("--amp", default="auto", choices=["auto", *AMP_DTYPES])
+    ap.add_argument("--formats", default="fp32,fp16", help="formats to check on a GPU (bf16 is slow on a T4; each one compiles kernels on first use)")
     ap.add_argument("--lr", type=float, default=2e-4)
     ap.add_argument("--max-elements", type=int, default=40)
     ap.add_argument("--out", default="smoke_report.json")
@@ -129,7 +130,7 @@ def main() -> None:
 
     # 1) number formats
     probe = to_device(next(synthetic_batches(collator, args.batch_size, seed=1, **gen)), device)
-    modes = list(AMP_DTYPES) if device.type == "cuda" else ["fp32"]
+    modes = args.formats.split(",") if device.type == "cuda" else ["fp32"]
     report["formats"] = {m: format_check(model, probe, device, m, reps=5 if device.type == "cuda" else 2) for m in modes}
     for m, r in report["formats"].items():
         print("format", m, r, flush=True)
@@ -177,7 +178,18 @@ def main() -> None:
     report["checkpoint_mb"] = round((ckpt / "selector.safetensors").stat().st_size / 1e6, 1)
     shutil.rmtree(ckpt, ignore_errors=True)
 
-    # 4) time per decision
+    # 4) how cost grows with batch size and screen size (decides the real training batch size)
+    if device.type == "cuda":
+        report["scaling"] = []
+        for bs, n in ((16, 40), (64, 40), (16, 160), (32, 160)):
+            b = to_device(next(synthetic_batches(collator, bs, seed=3, min_elements=n, max_elements=n)), device)
+            r = format_check(model, b, device, amp, reps=2)
+            report["scaling"].append({"batch": bs, "elements": n, **{k: r.get(k) for k in ("ok", "s_per_step", "tokens_per_s", "peak_mem_gb", "error") if k in r}})
+            print("scaling", report["scaling"][-1], flush=True)
+            del b
+            torch.cuda.empty_cache()
+
+    # 5) time per decision
     report["latency"] = [decision_latency(model, collator, device, amp, n, reps=10 if device.type == "cuda" else 3) for n in (32, 128)]
 
     Path(args.out).write_text(json.dumps(report, indent=2))

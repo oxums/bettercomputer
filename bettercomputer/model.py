@@ -136,9 +136,14 @@ class SelectorModel(nn.Module):
 
         self.adapter = ElementAdapter(hidden, self.cfg, out_norm=emb_norm)
         self.query = nn.Parameter(emb_mean + 0.02 * torch.randn(hidden))
+        # Pointer scores are cosine similarities times a learned temperature, so they start
+        # near uniform. Raw dot products of hidden states started with a loss near 10 and the
+        # model collapsed to always answering "none".
+        self.ptr_norm = nn.LayerNorm(hidden)
         self.ptr_query = nn.Linear(hidden, self.cfg.pointer_dim)
         self.ptr_elem = nn.Linear(hidden, self.cfg.pointer_dim)
-        self.none = nn.Parameter(0.02 * torch.randn(self.cfg.pointer_dim))
+        self.none = nn.Parameter(torch.randn(self.cfg.pointer_dim))
+        self.log_temp = nn.Parameter(torch.tensor(math.log(10.0)))
         self.action_head = nn.Linear(hidden, self.cfg.n_actions)
 
     # ---- forward -------------------------------------------------------------------------
@@ -177,12 +182,13 @@ class SelectorModel(nn.Module):
         elem_pos = elem_pos.clamp(max=seq_len - 1)
         h_elem = hidden[rows.unsqueeze(1), elem_pos]  # [B,N,H]
 
-        q = self.ptr_query(h_query)  # [B,P]
-        e = self.ptr_elem(h_elem)  # [B,N,P]
-        scale = 1.0 / math.sqrt(q.shape[-1])
-        elem_scores = torch.einsum("bp,bnp->bn", q, e) * scale
+        h_query = self.ptr_norm(h_query)
+        q = F.normalize(self.ptr_query(h_query), dim=-1)  # [B,P]
+        e = F.normalize(self.ptr_elem(self.ptr_norm(h_elem)), dim=-1)  # [B,N,P]
+        temp = self.log_temp.exp().clamp(max=100.0)
+        elem_scores = torch.einsum("bp,bnp->bn", q, e) * temp
         elem_scores = elem_scores.masked_fill(batch["elem_mask"] == 0, float("-inf"))
-        none_score = (q @ self.none).unsqueeze(1) * scale
+        none_score = (q @ F.normalize(self.none, dim=0)).unsqueeze(1) * temp
         # index 0 = "none of these", index i+1 = element i
         pointer_logits = torch.cat([none_score, elem_scores], dim=1)
         return {"pointer_logits": pointer_logits, "action_logits": self.action_head(h_query)}

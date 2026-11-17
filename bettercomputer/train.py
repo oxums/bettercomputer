@@ -28,7 +28,7 @@ def autocast(device: torch.device, amp: str):
 def evaluate(model: SelectorModel, batches: Iterator[dict], n_batches: int, device: torch.device, amp: str) -> dict[str, float]:
     model.eval()
     n = ptr_ok = act_ok = 0
-    none_n = none_ok = 0
+    none_n = none_ok = elem_n = elem_ok = 0
     for _ in range(n_batches):
         batch = to_device(next(batches), device)
         with autocast(device, amp):
@@ -39,10 +39,13 @@ def evaluate(model: SelectorModel, batches: Iterator[dict], n_batches: int, devi
         is_none = batch["target"] == 0
         none_n += is_none.sum().item()
         none_ok += (pred[is_none] == 0).sum().item()
+        elem_n += (~is_none).sum().item()
+        elem_ok += (pred[~is_none] == batch["target"][~is_none]).sum().item()
         n += batch["target"].shape[0]
     model.train()
     return {
         "pointer_acc": ptr_ok / n,
+        "elem_acc": elem_ok / max(1, elem_n),  # only samples whose target is on screen
         "action_acc": act_ok / n,
         "none_acc": none_ok / max(1, none_n),
         "samples": n,
@@ -56,14 +59,21 @@ def train(
     device: torch.device,
     amp: str = "fp32",
     lr: float = 2e-4,
+    new_lr_mult: float = 5.0,
     warmup: int = 20,
     ckpt_dir: str | Path | None = None,
     save_every: int = 200,
     log_every: int = 20,
 ) -> list[dict]:
     """Runs up to `steps` optimizer steps. If ckpt_dir holds a checkpoint, continues from it."""
-    params = [p for p in model.parameters() if p.requires_grad]
-    opt = torch.optim.AdamW(params, lr=lr, weight_decay=0.01)
+    # Parts trained from scratch (adapter, heads) get a higher rate than the LoRA layers.
+    named = [(n, p) for n, p in model.named_parameters() if p.requires_grad]
+    params = [p for _, p in named]
+    groups = [
+        {"params": [p for n, p in named if "lora_" in n], "base_lr": lr},
+        {"params": [p for n, p in named if "lora_" not in n], "base_lr": lr * new_lr_mult},
+    ]
+    opt = torch.optim.AdamW(groups, lr=lr, weight_decay=0.01)
     scaler = torch.amp.GradScaler(device.type, enabled=amp == "fp16")
     step, history = 0, []
 
@@ -90,7 +100,7 @@ def train(
     while step < steps:
         batch = to_device(next(batches), device)
         for group in opt.param_groups:
-            group["lr"] = lr * min(1.0, (step + 1) / max(1, warmup))
+            group["lr"] = group["base_lr"] * min(1.0, (step + 1) / max(1, warmup))
         with autocast(device, amp):
             out = model(batch)
         loss = model.loss(out, batch)
