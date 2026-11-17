@@ -181,7 +181,7 @@ def main() -> None:
     # 4) how cost grows with batch size and screen size (decides the real training batch size)
     if device.type == "cuda":
         report["scaling"] = []
-        for bs, n in ((16, 40), (64, 40), (16, 160), (32, 160)):
+        for bs, n in ((16, 40), (24, 120), (16, 160)):
             b = to_device(next(synthetic_batches(collator, bs, seed=3, min_elements=n, max_elements=n)), device)
             r = format_check(model, b, device, amp, reps=2)
             report["scaling"].append({"batch": bs, "elements": n, **{k: r.get(k) for k in ("ok", "s_per_step", "tokens_per_s", "peak_mem_gb", "error") if k in r}})

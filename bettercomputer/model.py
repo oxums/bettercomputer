@@ -98,6 +98,11 @@ class ElementAdapter(nn.Module):
             nn.SiLU(),
             nn.Linear(hidden, hidden),
         )
+        # Zero the last layer so the adapter starts as a pass-through of the pooled text
+        # embedding. With a random start its output was several times larger than the text
+        # signal and hid it from the pretrained body.
+        nn.init.zeros_(self.mlp[-1].weight)
+        nn.init.zeros_(self.mlp[-1].bias)
         self.scale = nn.Parameter(torch.tensor(float(out_norm)))
 
     def forward(self, boxes: torch.Tensor, types: torch.Tensor, text_vecs: torch.Tensor) -> torch.Tensor:
@@ -108,7 +113,7 @@ class ElementAdapter(nn.Module):
         # Residual: at the start of training an element already looks like "the average of
         # its words", which the pretrained body can read.
         x = x + text_vecs
-        return F.normalize(x, dim=-1) * self.scale
+        return F.normalize(x, dim=-1, eps=1e-6) * self.scale
 
 
 class SelectorModel(nn.Module):
