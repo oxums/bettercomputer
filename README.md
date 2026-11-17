@@ -4,7 +4,7 @@ A small, fast executor model for computer use. A large model plans in intents ("
 
 ## What is here
 
-- `bettercomputer/model.py`: the selector model. Qwen3.5-0.8B-Base with LoRA, an element adapter (one screen element becomes one input vector), a pointer head (picks an element or "none of these") and an action head.
+- `bettercomputer/model.py`: the selector model. Qwen3.5-0.8B-Base with LoRA, an element adapter (a screen element's box and type become one input vector, followed by its text tokens), a pointer head (picks an element or "none of these") and an action head.
 - `bettercomputer/data.py`: the sample format, batching, and a synthetic pointing task.
 - `bettercomputer/train.py`: training loop with checkpoint and resume.
 - `bettercomputer/smoke.py`: stage 0 smoke test.
@@ -25,7 +25,7 @@ Stage 0 (smoke test) has run on a Colab T4. No real data yet; the model has only
 
 Feeding each element's text as ordinary tokens is now the default. It costs several positions per element instead of one.
 
-Colab notes: the recurrent-layer kernel (`flash-linear-attention`, preinstalled) compiles for about 5 minutes per number format on first use in a fresh runtime. `peft` is not used because it refuses to load next to Colab's `torchao`.
+Colab notes: the recurrent-layer kernel (`flash-linear-attention`, already present in the Colab runtime) compiles for about 5 minutes per number format on first use in a fresh runtime. `peft` is not used because it refuses to load next to Colab's `torchao`.
 
 ## Run the smoke test
 
