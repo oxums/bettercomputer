@@ -6,7 +6,7 @@
 4. Do checkpoints save, reload and resume correctly?
 5. How long does one decision take?
 
-Run:  python -m bettercomputer.smoke --steps 300
+Run:  python -m bettercomputer.smoke
 Prints a JSON report between ===REPORT=== markers and writes it to --out.
 """
 
@@ -90,14 +90,14 @@ def decision_latency(model: SelectorModel, collator: Collator, device: torch.dev
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--steps", type=int, default=300, help="training steps for the learning test")
-    ap.add_argument("--batch-size", type=int, default=16)
-    ap.add_argument("--eval-batches", type=int, default=16)
+    ap.add_argument("--steps", type=int, default=500, help="training steps for the learning test")
+    ap.add_argument("--batch-size", type=int, default=8)
+    ap.add_argument("--eval-batches", type=int, default=32)
     ap.add_argument("--amp", default="auto", choices=["auto", *AMP_DTYPES])
     ap.add_argument("--formats", default="fp32,fp16", help="formats to check on a GPU (bf16 is slow on a T4; each one compiles kernels on first use)")
     ap.add_argument("--lr", type=float, default=2e-4)
     ap.add_argument("--max-elements", type=int, default=40)
-    ap.add_argument("--text-mode", default="pooled", choices=["pooled", "tokens"])
+    ap.add_argument("--text-mode", default="tokens", choices=["tokens", "pooled"])
     ap.add_argument("--out", default="smoke_report.json")
     args = ap.parse_args()
 
@@ -183,7 +183,7 @@ def main() -> None:
     # 4) how cost grows with batch size and screen size (decides the real training batch size)
     if device.type == "cuda":
         report["scaling"] = []
-        for bs, n in ((16, 40), (24, 120), (16, 160)):
+        for bs, n in ((8, 40), (8, 100), (4, 160)):
             b = to_device(next(synthetic_batches(collator, bs, seed=3, min_elements=n, max_elements=n)), device)
             r = format_check(model, b, device, amp, reps=2)
             report["scaling"].append({"batch": bs, "elements": n, **{k: r.get(k) for k in ("ok", "s_per_step", "tokens_per_s", "peak_mem_gb", "error") if k in r}})

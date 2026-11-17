@@ -2,11 +2,12 @@
 
 A frozen Qwen3.5 body with LoRA layers, plus three small parts trained from scratch:
 
-- ElementAdapter: turns one parsed screen element (box, type, text) into one input vector.
+- ElementAdapter: turns one parsed screen element (box, type, text) into one input vector,
+  which is followed by the element's own text as ordinary tokens.
 - pointer head:   scores every element against the intent and picks one, or "none of these".
 - action head:    picks what to do with it (click, type, ...).
 
-Sequence fed to the body:  [intent tokens] [one vector per element] [query vector]
+Sequence fed to the body:  [intent tokens] [per element: vector, text tokens] [query vector]
 The body is causal, so the query position has seen everything and each element position
 has seen the intent. The pointer head compares the query's hidden state with each element's.
 """
@@ -45,7 +46,9 @@ class SelectorConfig:
     box_freqs: int = 8
     type_dim: int = 64
     pointer_dim: int = 256
-    text_mode: str = "pooled"  # "pooled": one position per element | "tokens": adapter vector + text tokens
+    # "tokens": adapter vector + the element's text tokens (learns far faster; several positions per element)
+    # "pooled": one position per element (cheapest at run time; learned poorly in the smoke test)
+    text_mode: str = "tokens"
     n_types: int = len(ELEMENT_TYPES)
     n_actions: int = len(ACTIONS)
 

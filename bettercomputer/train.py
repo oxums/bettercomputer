@@ -113,7 +113,7 @@ def train(
         scaler.step(opt)
         scaler.update()
         step += 1
-        tokens += int(batch["intent_mask"].sum() + batch["elem_mask"].sum()) + batch["target"].shape[0]
+        tokens += int(batch["intent_mask"].sum() + batch["elem_mask"].sum() + batch["elem_text_mask"].sum()) + batch["target"].shape[0]
 
         if step % log_every == 0 or step == steps:
             dt = time.time() - t0
