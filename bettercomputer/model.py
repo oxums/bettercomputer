@@ -45,6 +45,7 @@ class SelectorConfig:
     box_freqs: int = 8
     type_dim: int = 64
     pointer_dim: int = 256
+    text_mode: str = "pooled"  # "pooled": one position per element | "tokens": adapter vector + text tokens
     n_types: int = len(ELEMENT_TYPES)
     n_actions: int = len(ACTIONS)
 
@@ -164,27 +165,41 @@ class SelectorModel(nn.Module):
         text_vecs = self._pooled_text(batch["elem_text_ids"], batch["elem_text_mask"])
         elems = self.adapter(batch["elem_boxes"].float(), batch["elem_types"], text_vecs).to(tok.dtype)
 
+        elem_mask = batch["elem_mask"].bool()
+
+        # Each element is a block of positions: its adapter vector, then (in "tokens" mode) its
+        # own text as ordinary tokens, which the pretrained body already knows how to read.
+        if self.cfg.text_mode == "tokens":
+            text_emb = embed(batch["elem_text_ids"])  # [B,N,T,H]
+            block = torch.cat([elems.unsqueeze(2), text_emb], dim=2)
+            block_mask = torch.cat(
+                [elem_mask.unsqueeze(2), batch["elem_text_mask"].bool() & elem_mask.unsqueeze(2)], dim=2
+            )
+        else:
+            block, block_mask = elems.unsqueeze(2), elem_mask.unsqueeze(2)
+        block_len = block_mask.sum(dim=2)  # [B,N] positions used by each element
+
         intent_len = batch["intent_mask"].sum(dim=1)  # [B]
-        n_elem = batch["elem_mask"].sum(dim=1)  # [B]
-        B, n_max = elems.shape[0], elems.shape[1]
-        seq_len = int((intent_len + n_elem).max().item()) + 1
+        query_pos = intent_len + block_len.sum(dim=1)  # [B]
+        B = elems.shape[0]
+        seq_len = int(query_pos.max().item()) + 1
 
         x = tok.new_zeros(B, seq_len, tok.shape[-1])
         mask = torch.zeros(B, seq_len, dtype=torch.long, device=tok.device)
         query = self.query.to(tok.dtype)
         for i in range(B):
-            li, ni = int(intent_len[i]), int(n_elem[i])
+            li, qi = int(intent_len[i]), int(query_pos[i])
             x[i, :li] = tok[i, :li]
-            x[i, li : li + ni] = elems[i, :ni]
-            x[i, li + ni] = query
-            mask[i, : li + ni + 1] = 1
+            x[i, li:qi] = block[i][block_mask[i]]
+            x[i, qi] = query
+            mask[i, : qi + 1] = 1
 
         hidden = self.body(inputs_embeds=x, attention_mask=mask).last_hidden_state.float()
 
         rows = torch.arange(B, device=hidden.device)
-        h_query = hidden[rows, intent_len + n_elem]  # [B,H]
-        elem_pos = intent_len.unsqueeze(1) + torch.arange(n_max, device=hidden.device).unsqueeze(0)
-        elem_pos = elem_pos.clamp(max=seq_len - 1)
+        h_query = hidden[rows, query_pos]  # [B,H]
+        # An element is read at its last position, after it has seen its own text.
+        elem_pos = (intent_len.unsqueeze(1) + block_len.cumsum(dim=1) - 1).clamp(min=0, max=seq_len - 1)
         h_elem = hidden[rows.unsqueeze(1), elem_pos]  # [B,N,H]
 
         h_query = self.ptr_norm(h_query)

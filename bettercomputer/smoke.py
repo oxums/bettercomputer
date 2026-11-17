@@ -97,6 +97,7 @@ def main() -> None:
     ap.add_argument("--formats", default="fp32,fp16", help="formats to check on a GPU (bf16 is slow on a T4; each one compiles kernels on first use)")
     ap.add_argument("--lr", type=float, default=2e-4)
     ap.add_argument("--max-elements", type=int, default=40)
+    ap.add_argument("--text-mode", default="pooled", choices=["pooled", "tokens"])
     ap.add_argument("--out", default="smoke_report.json")
     args = ap.parse_args()
 
@@ -118,7 +119,8 @@ def main() -> None:
 
     torch.manual_seed(0)
     t = time.time()
-    model = SelectorModel(SelectorConfig()).to(device)
+    model = SelectorModel(SelectorConfig(text_mode=args.text_mode)).to(device)
+    report["text_mode"] = args.text_mode
     report["load_s"] = round(time.time() - t, 1)
     report["params"] = {**model.param_counts(), "lora_layers": model.lora_layers}
     print("loaded:", report["params"], flush=True)
